@@ -1,16 +1,33 @@
-# tsgo holds independent type state per checker → peak RSS scales with `--checkers`
+# tsgo peak RSS scales with `--checkers`: each checker re-instantiates the shared library surface
 
-**This is about memory, not speed.** `tsgo` (TS7 native) runs a pool of checker workers
-(`--checkers`, default 4), each with its own type state. A generic surface that most
-files share — a CSS-in-TS layer, an API-client schema, a table/forms library — is instantiated
-once *per checker* rather than once per program. Instantiation count and peak RSS both scale
-linearly in `--checkers`; `--checkers 1` / `--singleThreaded` collapses them to `tsc`'s numbers.
+**TL;DR**
 
-`tsgo` is ~10× faster than `tsc` here; the cost is memory — at the default `--checkers`, a real
-project pays ~1.6× `tsc`'s peak RSS for the same check (both tools report 0 errors throughout;
-every comparison below is same-input, same-result, different memory).
+- `tsgo` (TS7 native) runs a pool of checker workers (`--checkers`, default 4), each with its own
+  type state. A generic surface that most files share — a CSS-in-TS layer, an API-client schema, a
+  table/forms library — is instantiated once *per checker*, not once per program.
+- Peak RSS and instantiation count both scale linearly in `--checkers`. On a real 3758-file app the
+  default `--checkers 4` costs **~1.6× `tsc`'s peak RSS and 2.15× its instantiations — for the same
+  0 errors** from both tools. `--checkers 1` / `--singleThreaded` collapses both to `tsc`'s numbers.
+- This is the **memory** cost of the mechanism [#2859][2859] closed on **speed**, and unlike #2859
+  it is not user-fixable: every file legitimately does `import { css } from "styled-system/css"` —
+  there is no cross-file reference chain to restructure.
 
-Minimal proof (`synthetic/`, no Panda, no codegen) — instantiations exactly N× the checker count:
+`tsgo` is ~10× faster than `tsc` here; the cost is memory. Every comparison below is same-input,
+same-result, different memory.
+
+---
+
+## Reproduce
+
+The headline is Panda-free and needs no codegen — 8 tiny committed modules that share one
+deliberately heavy generic, checked with `tsc` and with `tsgo` at `--checkers 1,2,4,8`:
+
+```bash
+npm install
+npm run diag:synthetic   # instantiations are exactly linear in --checkers
+```
+
+Instantiations come out exactly N× the checker count, collapsing to `tsc` at `--checkers 1`:
 
 | run | Instantiations | vs `tsc` |
 |---|---|---|
@@ -20,20 +37,7 @@ Minimal proof (`synthetic/`, no Panda, no codegen) — instantiations exactly N�
 | `tsgo --checkers 4` *(default)* | 35,392 | 4.00× |
 | `tsgo --checkers 8` | 70,784 | 8.00× |
 
----
-
-## Run it
-
-```bash
-npm install
-npm run diag:synthetic   # HEADLINE — Panda-free, no codegen: instantiations are linear in --checkers
-```
-
-`diag:synthetic` type-checks 8 tiny committed modules that share one deliberately heavy generic,
-with `tsc` and with `tsgo` at `--checkers 1,2,4,8`. No `panda codegen`, no
-`node_modules` beyond `typescript` + the native preview.
-
-The same effect on a real library surface (Panda CSS) — this needs codegen:
+The same effect on a real library surface (Panda CSS) needs codegen first:
 
 ```bash
 npm run setup            # panda codegen -> ./styled-system (the heavy shared library types)
@@ -46,9 +50,8 @@ npm run diag:checkers    # tsc vs tsgo --checkers 1,2,4,8 on 8 committed src/exa
 
 ## Relation to #2859
 
-The per-checker duplication is known. In
-[#2859](https://github.com/microsoft/typescript-go/issues/2859) Anders Hejlsberg explained the
-mechanism and closed it as working as expected:
+The per-checker duplication is known. In [#2859][2859] Anders Hejlsberg explained the mechanism and
+closed it as working as expected:
 
 > "we create four checkers (by default) and assign them each a quarter of the files… each of the
 > four checkers ends up checking *all* of the fragments… 32M instantiations jumping to 125M in
@@ -96,20 +99,10 @@ tsc : 0.36 0.33 0.38 0.38 0.36 0.36 0.34 0.37 0.36 0.35 0.37 0.34   (max 0.38 GB
 tsgo: 0.51 0.50 0.50 0.49 0.49 0.48 0.51 0.50 0.50 0.49 0.52 0.48   (min 0.48 GB)
 ```
 
-The instantiation count is the deterministic version of the same story — exactly linear in
-`--checkers`, collapsing to `tsc` at `--checkers 1`:
-
-| run | Instantiations | vs `tsc` |
-|---|---|---|
-| `tsc` (TS6) | 165,664 | 1.00× |
-| `tsgo --singleThreaded` | 165,602 | 1.00× |
-| `tsgo --checkers 1` | 165,602 | 1.00× |
-| `tsgo --checkers 2` | 328,676 | 1.98× |
-| `tsgo --checkers 4` *(default)* | 654,824 | 3.95× |
-| `tsgo --checkers 8` | 1,307,120 | 7.89× |
-
-(Panda surface, 8 committed files.) The "~4×" is the default checker count;
-`GOMAXPROCS` does not change these numbers, `--checkers` does.
+The deterministic mirror of the same story: on the Panda surface instantiations go
+**165,664** (`tsc`) → **654,824** (`tsgo`, default 4) = **3.95×**, collapsing to `tsc`'s count at
+`--checkers 1` / `--singleThreaded`. Same shape as the synthetic table above, at real-library
+magnitude.
 
 ### Caveats
 
@@ -125,7 +118,7 @@ The instantiation count is the deterministic version of the same story — exact
 
 ---
 
-## Real-world magnitude: Panda CSS
+## Real-world magnitude
 
 The synthetic surface proves the *shape*; Panda shows the *magnitude* on a real shared library. At
 the default `--checkers 4`, 8 committed files:
@@ -139,10 +132,21 @@ the default `--checkers 4`, 8 committed files:
 The cost stacks across libraries. Every widely used generic-heavy dependency (Panda, Zodios, React
 Query, React Table, Formily) contributes its own shared surface, re-instantiated per checker. The
 per-checker offsets add instead of diluting — which is why a real 3758-file app *sustains* ~2.15×
-([below](#real-world-numbers)) rather than regressing toward parity as file count grows.
+(below) rather than regressing toward parity as file count grows. For shared-infrastructure
+generics the duplicated surface *is* the dominant cost, so the overhead is `(C − 1)×` the shared
+machinery — +295% at `--checkers 4`, +689% at `--checkers 8`.
 
-For shared-infrastructure generics the duplicated surface *is* the dominant cost, so the overhead
-is `(C − 1)×` the shared machinery — +295% at `--checkers 4`, +689% at `--checkers 8`.
+Large production React app, 3758 files, identical 0 errors from both tools:
+
+| Metric (3758 files) | TS6 `tsc` | TS7 `tsgo` (default) | tsgo / tsc |
+|---|---|---|---|
+| Symbols | 2.15 M | 4.88 M | 2.3× |
+| Types | 749 K | 2.13 M | 2.8× |
+| Instantiations | 37.7 M | 81.2 M | 2.15× |
+| Peak RSS (interleaved) | ~2.1 GB | ~3.3 GB | ~1.6× |
+
+`tsgo --singleThreaded` reproduces `tsc`'s instantiation count here too and lowers peak RSS toward
+`tsc`. (Private codebase; only tool-comparable metrics shown.)
 
 ---
 
@@ -219,20 +223,6 @@ gap tracks the size of the shared surface.
 
 ---
 
-## Real-world numbers
-
-Large production React app, 3758 files, identical 0 errors from both tools:
-
-| Metric (3758 files) | TS6 `tsc` | TS7 `tsgo` (default) | tsgo / tsc |
-|---|---|---|---|
-| Symbols | 2.15 M | 4.88 M | 2.3× |
-| Types | 749 K | 2.13 M | 2.8× |
-| Instantiations | 37.7 M | 81.2 M | 2.15× |
-| Peak RSS (interleaved) | ~2.1 GB | ~3.3 GB | ~1.6× |
-
-`tsgo --singleThreaded` reproduces `tsc`'s instantiation count here too and lowers peak RSS toward
-`tsc`. (Private codebase; only tool-comparable metrics shown.)
-
 ## Mitigation today
 
 `--checkers 2`, `--checkers 1`, or `--singleThreaded` trades throughput for memory and removes the
@@ -256,3 +246,5 @@ npx tsgo --version    # -> Version 7.0.0-dev.20260604.1
 
 Versions are pinned for deterministic counts. The saturation count tracks the default `--checkers`
 (4 here); the `--checkers` sweep itself is invariant.
+
+[2859]: https://github.com/microsoft/typescript-go/issues/2859
