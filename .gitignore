@@ -1,3 +1,5 @@
 node_modules/
 src/
+styled-system/
 package-lock.json
+*.log

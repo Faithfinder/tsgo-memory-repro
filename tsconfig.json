@@ -7,7 +7,9 @@
     "jsx": "react-jsx",
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "ignoreDeprecations": "6.0",
+    "paths": { "styled-system/*": ["./styled-system/*"] }
   },
-  "include": ["src"]
+  "include": ["src", "styled-system"]
 }
