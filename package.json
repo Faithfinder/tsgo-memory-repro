@@ -1,15 +1,19 @@
 {
   "name": "tsgo-memory-repro",
   "private": true,
-  "version": "2.0.0",
+  "version": "3.0.0",
   "type": "module",
-  "description": "Repro: tsgo (TS7 native) over-instantiates shared generics ~4x across the first 4 module boundaries vs tsc (TS6) on Panda CSS code, with a robust peak-RSS gap.",
+  "description": "Repro: tsgo (TS7 native) duplicates shared-generic instantiations once per checker (--checkers), so shared-infrastructure type machinery (e.g. Panda CSS) costs ~N×, not the documented ~20%, and scales peak RSS. --checkers 1 / --singleThreaded matches tsc exactly.",
   "scripts": {
     "setup": "panda codegen",
     "gen": "node pandagen.mjs",
     "diag": "npm run diag:ts6 && npm run diag:ts7",
     "diag:ts6": "tsc -p tsconfig.json --extendedDiagnostics",
-    "diag:ts7": "tsgo -p tsconfig.json --extendedDiagnostics"
+    "diag:ts7": "tsgo -p tsconfig.json --extendedDiagnostics",
+    "diag:checkers": "tsc -p tsconfig.json --extendedDiagnostics | grep -E '^Instantiations:' | sed 's/^/tsc          /'; for c in 1 2 4 8; do tsgo -p tsconfig.json --checkers $c --extendedDiagnostics | grep -E '^Instantiations:' | sed \"s/^/tsgo --checkers $c /\"; done",
+    "diag:single": "tsgo -p tsconfig.json --singleThreaded --extendedDiagnostics",
+    "gen:synthetic": "node synthetic/gen.mjs",
+    "diag:synthetic": "tsc -p synthetic/tsconfig.json --extendedDiagnostics | grep -E '^Instantiations:' | sed 's/^/tsc          /'; for c in 1 2 4 8; do tsgo -p synthetic/tsconfig.json --checkers $c --extendedDiagnostics | grep -E '^Instantiations:' | sed \"s/^/tsgo --checkers $c /\"; done"
   },
   "dependencies": {
     "@types/react": "18.3.30",
