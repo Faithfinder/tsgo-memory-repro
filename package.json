@@ -3,17 +3,17 @@
   "private": true,
   "version": "3.0.0",
   "type": "module",
-  "description": "Repro: tsgo (TS7 native) duplicates shared-generic instantiations once per checker (--checkers), so shared-infrastructure type machinery (e.g. Panda CSS) costs ~N×, not the documented ~20%, and scales peak RSS. --checkers 1 / --singleThreaded matches tsc exactly.",
+  "description": "Repro: tsgo (TS7 native) keeps independent type state per checker, so shared-infrastructure generics (e.g. Panda CSS) are re-instantiated once per --checkers worker and peak RSS scales with the checker count. About memory, not speed. --checkers 1 / --singleThreaded matches tsc exactly. `npm run diag:synthetic` is the Panda-free headline.",
   "scripts": {
+    "diag:synthetic": "tsc -p synthetic/tsconfig.json --extendedDiagnostics | grep -E '^Instantiations:' | sed 's/^/tsc          /'; for c in 1 2 4 8; do tsgo -p synthetic/tsconfig.json --checkers $c --extendedDiagnostics | grep -E '^Instantiations:' | sed \"s/^/tsgo --checkers $c /\"; done",
+    "gen:synthetic": "node synthetic/gen.mjs",
     "setup": "panda codegen",
-    "gen": "node pandagen.mjs",
+    "diag:checkers": "tsc -p tsconfig.json --extendedDiagnostics | grep -E '^Instantiations:' | sed 's/^/tsc          /'; for c in 1 2 4 8; do tsgo -p tsconfig.json --checkers $c --extendedDiagnostics | grep -E '^Instantiations:' | sed \"s/^/tsgo --checkers $c /\"; done",
+    "diag:single": "tsgo -p tsconfig.json --singleThreaded --extendedDiagnostics",
     "diag": "npm run diag:ts6 && npm run diag:ts7",
     "diag:ts6": "tsc -p tsconfig.json --extendedDiagnostics",
     "diag:ts7": "tsgo -p tsconfig.json --extendedDiagnostics",
-    "diag:checkers": "tsc -p tsconfig.json --extendedDiagnostics | grep -E '^Instantiations:' | sed 's/^/tsc          /'; for c in 1 2 4 8; do tsgo -p tsconfig.json --checkers $c --extendedDiagnostics | grep -E '^Instantiations:' | sed \"s/^/tsgo --checkers $c /\"; done",
-    "diag:single": "tsgo -p tsconfig.json --singleThreaded --extendedDiagnostics",
-    "gen:synthetic": "node synthetic/gen.mjs",
-    "diag:synthetic": "tsc -p synthetic/tsconfig.json --extendedDiagnostics | grep -E '^Instantiations:' | sed 's/^/tsc          /'; for c in 1 2 4 8; do tsgo -p synthetic/tsconfig.json --checkers $c --extendedDiagnostics | grep -E '^Instantiations:' | sed \"s/^/tsgo --checkers $c /\"; done"
+    "gen": "node pandagen.mjs"
   },
   "dependencies": {
     "@types/react": "18.3.30",
