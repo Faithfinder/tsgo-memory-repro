@@ -2,9 +2,9 @@
 # Interleaved peak-RSS comparison of tsc (TS6) vs tsgo (TS7), to control for
 # machine-state drift and GC-timing variance. Runs them back-to-back, N rounds.
 #
-# Usage: ./measure.sh [rounds]    (default 8)
+# Usage: ./measure.sh [rounds]    (default 12)
 set -euo pipefail
-ROUNDS="${1:-8}"
+ROUNDS="${1:-12}"
 
 # Pick the right /usr/bin/time flag + RSS unit per OS.
 if [[ "$(uname)" == "Darwin" ]]; then
