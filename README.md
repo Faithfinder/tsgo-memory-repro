@@ -3,8 +3,9 @@
 **TL;DR**
 
 - `tsgo` (TS7 native) runs a pool of checker workers (`--checkers`, default 4), each with its own
-  type state. A generic surface that most files share — a CSS-in-TS layer, an API-client schema, a
-  table/forms library — is instantiated once *per checker*, not once per program.
+  type state. A generic surface that most files share — a CSS-in-TS layer (Panda CSS, in this
+  repro), an API-client schema, a table/forms library — is instantiated once *per checker*, not
+  once per program.
 - Peak RSS and instantiation count both scale linearly in `--checkers`. On a real 3758-file app the
   default `--checkers 4` costs **~1.6× `tsc`'s peak RSS and 2.15× its instantiations — for the same
   0 errors** from both tools. `--checkers 1` / `--singleThreaded` collapses both to `tsc`'s numbers.
