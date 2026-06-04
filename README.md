@@ -1,7 +1,7 @@
 # tsgo holds independent type state per checker → peak RSS scales with `--checkers`
 
 **This is about memory, not speed.** `tsgo` (TS7 native) runs a pool of checker workers
-(`--checkers`, default 4), each with its own independent type state. A generic surface that most
+(`--checkers`, default 4), each with its own type state. A generic surface that most
 files share — a CSS-in-TS layer, an API-client schema, a table/forms library — is instantiated
 once *per checker* rather than once per program. Instantiation count and peak RSS both scale
 linearly in `--checkers`; `--checkers 1` / `--singleThreaded` collapses them to `tsc`'s numbers.
@@ -114,7 +114,7 @@ The instantiation count is the deterministic version of the same story — exact
 ### Caveats
 
 - **Measure memory interleaved.** `tsc`'s peak RSS is high-variance (V8 GC timing); comparing a
-  separately-measured low `tsc` run against `tsgo` is invalid. `measure.sh` interleaves a fresh
+  separately measured low `tsc` run against `tsgo` is invalid. `measure.sh` interleaves a fresh
   `tsc` baseline every round.
 - **Don't compare the two tools' "Memory used" lines.** `tsc`'s `--extendedDiagnostics` "Memory
   used" is a cumulative V8 allocation counter (exceeds real peak RSS); `tsgo`'s is Go live heap.
@@ -136,7 +136,7 @@ the default `--checkers 4`, 8 committed files, 0 errors both:
 | Types | 10,884 | 44,236 | 4.06× |
 | **Instantiations** | **165,664** | **654,824** | **3.95×** |
 
-The cost stacks across libraries. Every widely-used generic-heavy dependency (Panda, Zodios, React
+The cost stacks across libraries. Every widely used generic-heavy dependency (Panda, Zodios, React
 Query, React Table, Formily) contributes its own shared surface, re-instantiated per checker. The
 per-checker offsets add instead of diluting — which is why a real 3758-file app *sustains* ~2.15×
 ([below](#real-world-numbers)) rather than regressing toward parity as file count grows.
@@ -210,7 +210,7 @@ duplicated work is shared across modules and so lands on multiple checkers.
 
 ### Mechanism proof, Panda-free (`synthetic/`)
 
-`synthetic/` defines one deliberately-heavy shared generic (a wide mapped type over ~100 keys whose
+`synthetic/` defines one deliberately heavy shared generic (a wide mapped type over ~100 keys whose
 per-key value is a branching-recursive type) and uses it from 8 tiny modules. It reproduces the
 exactly-N× scaling with no Panda and no codegen (the headline table at the top). The size of the
 gap tracks the size of the shared surface.
