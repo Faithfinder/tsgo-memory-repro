@@ -7,10 +7,10 @@ once *per checker* rather than once per program. Instantiation count and peak RS
 linearly in `--checkers`; `--checkers 1` / `--singleThreaded` collapses them to `tsc`'s numbers.
 
 `tsgo` is ~10× faster than `tsc` here; the cost is memory — at the default `--checkers`, a real
-project pays ~1.6× `tsc`'s peak RSS for the same 0-error check.
+project pays ~1.6× `tsc`'s peak RSS for the same check (both tools report 0 errors throughout;
+every comparison below is same-input, same-result, different memory).
 
-Minimal proof (`synthetic/`, no Panda, no codegen) — instantiations exactly N× the checker count,
-0 errors:
+Minimal proof (`synthetic/`, no Panda, no codegen) — instantiations exactly N× the checker count:
 
 | run | Instantiations | vs `tsc` |
 |---|---|---|
@@ -30,7 +30,7 @@ npm run diag:synthetic   # HEADLINE — Panda-free, no codegen: instantiations a
 ```
 
 `diag:synthetic` type-checks 8 tiny committed modules that share one deliberately heavy generic,
-with `tsc` and with `tsgo` at `--checkers 1,2,4,8`. Both report 0 errors. No `panda codegen`, no
+with `tsc` and with `tsgo` at `--checkers 1,2,4,8`. No `panda codegen`, no
 `node_modules` beyond `typescript` + the native preview.
 
 The same effect on a real library surface (Panda CSS) — this needs codegen:
@@ -108,7 +108,7 @@ The instantiation count is the deterministic version of the same story — exact
 | `tsgo --checkers 4` *(default)* | 654,824 | 3.95× |
 | `tsgo --checkers 8` | 1,307,120 | 7.89× |
 
-(Panda surface, 8 committed files, 0 errors both tools.) The "~4×" is the default checker count;
+(Panda surface, 8 committed files.) The "~4×" is the default checker count;
 `GOMAXPROCS` does not change these numbers, `--checkers` does.
 
 ### Caveats
@@ -128,7 +128,7 @@ The instantiation count is the deterministic version of the same story — exact
 ## Real-world magnitude: Panda CSS
 
 The synthetic surface proves the *shape*; Panda shows the *magnitude* on a real shared library. At
-the default `--checkers 4`, 8 committed files, 0 errors both:
+the default `--checkers 4`, 8 committed files:
 
 | `--extendedDiagnostics` | TS6 `tsc` | TS7 `tsgo` (default) | tsgo / tsc |
 |---|---|---|---|
