@@ -3,10 +3,11 @@
   "private": true,
   "version": "2.0.0",
   "type": "module",
-  "description": "Repro: tsgo (TS7 native) instantiates ~2x more types than tsc (TS6) on Panda CSS code, with a robust peak-RSS gap.",
+  "description": "Repro: tsgo (TS7 native) over-instantiates shared generics ~4x across the first 4 module boundaries vs tsc (TS6) on Panda CSS code, with a robust peak-RSS gap.",
   "scripts": {
     "setup": "panda codegen",
     "gen": "node pandagen.mjs",
+    "diag": "npm run diag:ts6 && npm run diag:ts7",
     "diag:ts6": "tsc -p tsconfig.json --extendedDiagnostics",
     "diag:ts7": "tsgo -p tsconfig.json --extendedDiagnostics"
   },

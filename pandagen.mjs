@@ -6,12 +6,16 @@
 // Zero proprietary code — only public packages (react, @pandacss/dev).
 //
 // Usage: node pandagen.mjs [fileCount]   (default 800; or set FILES env var)
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 
 const M = Number(process.argv[2] ?? process.env.FILES ?? 800);
 const SRC = new URL("./src/", import.meta.url);
-rmSync(SRC, { recursive: true, force: true });
 mkdirSync(SRC, { recursive: true });
+// Remove only previously-generated files (f*.tsx). The committed headline files
+// (src/example*.tsx) are left untouched — they reproduce the full gap on their own.
+for (const name of readdirSync(SRC)) {
+  if (/^f\d+\.tsx$/.test(name)) rmSync(new URL(name, SRC));
+}
 
 const f = (i) => `
 import * as React from "react";

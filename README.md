@@ -1,16 +1,18 @@
-# tsgo (TS7 native) over-instantiates vs tsc (TS6) on Panda CSS code
+# tsgo (TS7 native) over-instantiates shared generics across module boundaries
 
 **Claim:** On identical, error-free TypeScript that uses [Panda CSS](https://panda-css.com/),
-the native compiler **`tsgo` performs a fixed ~490K *more* type instantiations than
-`tsc`** for the shared `styled-system` type machinery — a **~4× over-instantiation
-that is constant regardless of project size** — and this shows up as a **robust
-peak-memory gap**. The instantiation counts are deterministic (machine-independent);
-the memory gap survives interleaved measurement. Zero proprietary code — only public
-packages + a generator.
+the native compiler **`tsgo` instantiates the shared `styled-system` generic type
+machinery once per module for the first ~4 modules that use it — a fixed ~4×
+over-instantiation — instead of caching it program-wide like `tsc` does.** The result is
+a constant **+489,160 instantiations** regardless of project size, which also shows up as
+a robust peak-memory gap. The over-instantiation is **deterministic, content-independent,
+and thread-independent**; within a single module `tsgo`'s caching matches `tsc` exactly.
 
-This is the minimized form of a regression seen on a large production React app
-(3758 files), where `tsgo` uses ~1.6× the peak RSS of `tsc`. A `tsc --generateTrace`
-of that app puts Panda CSS styled components at the top of the hot list.
+Zero proprietary code — only public packages (`react`, `@pandacss/dev`) plus a generator.
+This is the minimized form of a regression on a large production React app (3758 files)
+where `tsgo` uses ~2.15× the instantiations and ~1.6× the peak RSS of `tsc`.
+
+> **Filing against [microsoft/typescript-go](https://github.com/microsoft/typescript-go).**
 
 ---
 
@@ -18,92 +20,153 @@ of that app puts Panda CSS styled components at the top of the hot list.
 
 ```bash
 npm install
-npm run setup          # panda codegen -> generates ./styled-system (the heavy types)
-npm run gen            # generates ./src (default 800 files; `node pandagen.mjs 1500` for more)
-./measure.sh 12        # interleaved peak RSS, 12 rounds, + deterministic counts
+npm run setup     # panda codegen -> generates ./styled-system (the heavy shared types)
+npm run diag      # type-check the 8 committed src/example*.tsx with both tools (the headline)
+./mechanism.sh    # reproduce the deterministic fingerprint (ramp, content/thread-independence)
 ```
 
-`measure.sh` interleaves `tsc` and `tsgo` back-to-back (controls for machine-state
-drift and V8 GC-timing variance) and prints peak RSS per round plus the
-`--extendedDiagnostics` counts. macOS and Linux supported.
+`npm run diag` runs `tsc` then `tsgo` with `--extendedDiagnostics` over the **8 committed
+example files** — no generator needed — and prints the full gap below. Both report
+**0 errors**: identical, valid work.
 
-Both tools report **0 errors** → identical, valid work.
+To reproduce the linearity / fixed-offset claim at scale, also:
+
+```bash
+npm run gen       # generates ./src/f*.tsx (default 800; `node pandagen.mjs 1500` for more)
+./measure.sh 12   # interleaved peak RSS, 12 rounds, + deterministic counts
+```
 
 ---
 
-## The signal: a fixed, deterministic over-instantiation
+## The headline (8 committed files, no generator)
 
-These counts are **machine-independent and zero-variance** — you will see the exact
-same numbers on any machine (`npm run diag:ts6` / `npm run diag:ts7`). At the default
-800 files:
+`npm run diag` on the 8 committed `src/example*.tsx` — the full gap is already present:
 
 | `--extendedDiagnostics` | TS6 `tsc` | TS7 `tsgo` | tsgo / tsc |
 |---|---|---|---|
-| Symbols | 358,397 | 557,486 | 1.56× |
-| Types | 81,372 | 114,724 | 1.41× |
-| **Instantiations** | 415,936 | **905,096** | **2.18×** |
+| Symbols | 158,021 | 357,110 | 2.26× |
+| Types | 10,884 | 44,236 | 4.06× |
+| **Instantiations** | **165,664** | **654,824** | **3.95×** |
 
-The ratio alone understates it. Regenerate at several file counts (`node pandagen.mjs N`)
-and the instantiation counts fit a **perfectly linear** model (verified at N = 100, 400,
-800, 2000 — every point exact):
+Both: **0 errors**. The instantiation gap is **+489,160**. These counts are
+**machine-independent and zero-variance** — the same on any machine, any core count.
+
+(Note: the gap requires more than one module. A *single* file shows no gap at all —
+`tsc` and `tsgo` are identical at N=1. The gap accrues over the first ~4 modules and then
+saturates; see below. Eight committed files sits comfortably past saturation.)
+
+## The mechanism
+
+`./mechanism.sh` reproduces all of the following deterministically.
+
+### 1. The gap ramps over the first 4 modules, then saturates
+
+Regenerate at small file counts (`node pandagen.mjs N`) and watch the full-surface
+instantiation counts:
+
+| modules | `tsc` | `tsgo` | gap |
+|---|---|---|---|
+| 1 | 163,452 | 163,390 | ~0 |
+| 2 | 163,768 | 326,780 | 163,012 |
+| 3 | 164,084 | 490,170 | 326,086 |
+| 4 | 164,400 | 653,560 | **489,160** |
+| 5 | 164,716 | 653,876 | 489,160 |
+| 6 | 165,032 | 654,192 | 489,160 |
+
+`tsc` adds a fixed marginal cost (316 instantiations) per module and instantiates the
+shared machinery **once**. `tsgo` adds a *full extra re-instantiation of the shared
+machinery* (~163K) for modules 2, 3 and 4 — three redundant copies — then drops to the
+same 316/module marginal. So `tsgo` instantiates the shared `styled-system` machinery
+**4× (once per module, capped at 4)** where `tsc` does it **1×**. The counts fit an exact
+linear model for N ≥ 4:
 
 ```
-tsc  instantiations = 163,136 + 316·N
-tsgo instantiations = 652,296 + 316·N
+tsc  instantiations = 163,136 + 316·N      (holds for all N)
+tsgo instantiations = 652,296 + 316·N      (holds for N ≥ 4; 652,296 ≈ 4 × 163,136)
 ```
 
-Two facts fall out:
+The fixed offset is `652,296 − 163,136 = 489,160` — three redundant instantiations of the
+shared machinery, incurred once and never repaid down.
 
-- **The marginal cost is identical** — each added file costs *both* tools exactly 316
-  instantiations. `tsgo` is not slower-per-file.
-- **The gap is a fixed offset of 489,160 instantiations** — `tsgo` instantiates the
-  shared Panda `styled-system` type machinery **4.0× more than `tsc`** (652K vs 163K),
-  *once*, independent of file count. This fixed cost is the entire regression.
+### 2. It is content-independent (same 4× on a one-line file)
 
-So the headline ratio shrinks as you dilute the fixed cost with cheap files (2.18× at
-800 files → 1.62× at 2000), but the **absolute over-instantiation (~489K) and the 4×
-fixed multiplier are constant**. That points squarely at instantiation/type caching of
-shared generic types differing between the two checkers.
+Replace each file with a single `css({ color: "red.500" })` call. The per-module cost
+shrinks from ~163K to ~3.5K, but the **multiplier is identical**:
+
+| modules | `tsc` | `tsgo` |
+|---|---|---|
+| 1 | 3,459 | 3,464 |
+| 2 | 3,459 | 6,928 |
+| 3 | 3,459 | 10,392 |
+| 4 | 3,459 | **13,856** |
+| 5 | 3,459 | 13,856 |
+| 6 | 3,459 | 13,856 |
+
+`tsc` is **dead flat** — it instantiates `css`'s machinery once and reuses it for every
+module. `tsgo` = per-module-cost × min(modules, 4) = `3,464 × 4 = 13,856`, exactly 4.00×.
+The 4× is a property of the *checker's cross-module instantiation caching*, not of Panda's
+types or of how much any file uses.
+
+### 3. The boundary is the module, not the call
+
+Eight `css()` calls in **eight files** → `tsgo` 13,856 (4×). The same eight calls in
+**one file** → `tsgo` 3,485 (`tsc` 3,480) — **1×, identical to tsc**. Within a module
+`tsgo` deduplicates instantiations perfectly; the over-instantiation happens *only across
+module boundaries*, for the first 4 modules.
+
+### 4. It is not a parallelism artifact
+
+The minimal 8-module count is **13,856 at `GOMAXPROCS=1, 2, 4, 8`** alike (on a 12-core
+machine). The over-instantiation is intrinsic to the checker's data structures, not a
+per-worker-cache race.
+
+## Scale & linearity (generator)
+
+`npm run gen` (800 files → 808 total with the 8 committed) confirms the offset is fixed,
+not per-file:
+
+| `--extendedDiagnostics` (808 files) | TS6 `tsc` | TS7 `tsgo` | tsgo / tsc |
+|---|---|---|---|
+| Symbols | 360,421 | 559,510 | 1.55× |
+| Types | 82,084 | 115,436 | 1.41× |
+| **Instantiations** | 418,464 | 907,624 | 2.17× |
+
+Same **+489,160** gap as at 8 files. Because the offset is fixed, the *ratio* dilutes as
+you add cheap uniform files (3.95× at 8 → 2.17× at 808 → 1.62× at 2000), while the absolute
+over-instantiation and the 4× multiplier stay constant. Read the absolute gap, not the ratio.
 
 ## Corroboration: peak RSS (interleaved)
 
-Apple Silicon, macOS, `typescript@6.0.3`, `@typescript/native-preview@7.0.0-dev.20260604.1`.
-12 interleaved rounds, 800 files (`maximum resident set size`):
+Apple Silicon, macOS. 12 interleaved rounds at 808 files (`maximum resident set size`):
 
 ```
-tsc : 0.34 0.36 0.34 0.34 0.38 0.35 0.35 0.41 0.39 0.37 0.35 0.38   (max 0.41 GB)
-tsgo: 0.51 0.50 0.48 0.46 0.49 0.49 0.51 0.50 0.49 0.50 0.51 0.51   (min 0.46 GB)
+tsc : 0.36 0.33 0.38 0.38 0.36 0.36 0.34 0.37 0.36 0.35 0.37 0.34   (max 0.38 GB)
+tsgo: 0.51 0.50 0.50 0.49 0.49 0.48 0.51 0.50 0.50 0.49 0.52 0.48   (min 0.48 GB)
 ```
 
-Non-overlapping: `tsc`'s worst run (0.41 GB) stays below `tsgo`'s best (0.46 GB).
-`tsgo` is also ~10× faster — this is a speed/memory trade-off, not a free lunch.
+Non-overlapping: `tsc`'s worst run stays below `tsgo`'s best. `tsgo` is also ~10× faster —
+a speed/memory trade-off, not a free lunch.
 
-### Honest caveats (please read before dismissing)
+### Caveats (please read before dismissing)
 
-- **Measure interleaved.** `tsc`'s peak RSS is high-variance (V8 GC timing) and can
-  swing ~0.8–1.8 GB on larger inputs; comparing a separately-measured `tsc` low run
-  against `tsgo` is not valid. `measure.sh` interleaves on purpose.
-- **The ratio dilutes; the absolute gap does not.** The regression is a *fixed* ~489K
-  extra instantiations (4.0× on Panda's shared `styled-system` machinery), so as you
-  add cheap uniform files with equal marginal cost the *ratio* shrinks (2.18× at 800 →
-  1.62× at 2000). Read the absolute gap, not the ratio. (Note: `styled-system` types in
-  isolation instantiate *nothing* in either tool — instantiation is lazy, triggered by
-  the first `css()`/`cva()`/`styled()` use; the 4× fixed cost is incurred once on first
-  use and cached thereafter.) The real app *sustains* ~2.15× at 3758 files because it
-  stacks many generic-heavy libraries (Zodios, React Query, React Table, Formily) on top
-  of Panda — each contributes its own fixed over-instantiation, so the offsets add up
-  instead of diluting. This minimal repro isolates the single biggest contributor.
-- **Don't compare `tsc`'s "Memory used" to `tsgo`'s.** `tsc`'s `--extendedDiagnostics`
-  "Memory used" is a cumulative V8 allocation counter (it exceeds actual peak RSS),
-  while `tsgo`'s is Go live heap. They are not comparable. Use `maximum resident set
-  size` (peak RSS) for memory, and the instantiation count for the deterministic signal.
+- **Measure memory interleaved.** `tsc`'s peak RSS is high-variance (V8 GC timing) and can
+  swing widely on larger inputs; comparing a separately-measured `tsc` low run against
+  `tsgo` is invalid. `measure.sh` interleaves `tsc`-then-`tsgo` every round on purpose.
+- **Read the absolute instantiation gap, not the ratio.** The regression is a *fixed*
+  ~489K extra instantiations, so the ratio shrinks as cheap files dilute it. The real app
+  *sustains* ~2.15× at 3758 files because it stacks many generic-heavy libraries (Zodios,
+  React Query, React Table, Formily) on top of Panda — each contributes its own fixed
+  offset, so they add instead of diluting. This repro isolates the single biggest one.
+- **Don't compare the two tools' "Memory used" lines.** `tsc`'s `--extendedDiagnostics`
+  "Memory used" is a cumulative V8 allocation counter (exceeds real peak RSS); `tsgo`'s is
+  Go live heap. They are not comparable. Use peak RSS for memory and the instantiation
+  count for the deterministic signal.
 
 ---
 
 ## Real-world numbers (private codebase — comparable metrics only)
 
-Large production React app, 3758 files, identical 0 errors from both,
-`--extendedDiagnostics` (deterministic) + interleaved peak RSS:
+Large production React app, 3758 files, identical 0 errors from both:
 
 | Metric (3758 files) | TS6 `tsc` | TS7 `tsgo` | tsgo / tsc |
 |---|---|---|---|
@@ -112,14 +175,35 @@ Large production React app, 3758 files, identical 0 errors from both,
 | Instantiations | 37.7 M | 81.2 M | 2.15× |
 | Peak RSS (interleaved) | ~2.1 GB | ~3.3 GB | ~1.6× |
 
-The native checker materializes ~2× the type/instantiation objects for the same
-program. Single-threaded (`GOMAXPROCS=1 tsgo`) reproduces the same peak RSS, so it
-is intrinsic to the checker's data structures, not a parallelism artifact.
+Single-threaded (`GOMAXPROCS=1 tsgo`) reproduces the same peak RSS, consistent with the
+thread-independence above — intrinsic to the checker's data structures.
+
+## Environment
+
+| | |
+|---|---|
+| OS / arch | macOS (Darwin 25.5.0), Apple Silicon `arm64`, 12 cores |
+| Node | v22.16.0 |
+| `typescript` | 6.0.3 |
+| `@typescript/native-preview` | 7.0.0-dev.20260604.1 |
+
+```bash
+node --version
+npx tsc --version     # -> Version 6.0.3
+npx tsgo --version    # -> Version 7.0.0-dev.20260604.1
+```
+
+Versions are pinned in `package.json` for deterministic counts. Please re-confirm the gap
+on `@typescript/native-preview@latest` — the exact saturation count (4) may shift, but the
+8 committed files sit far enough past it to show the full gap regardless.
 
 ## Questions for the TypeScript team
 
-1. Is `tsgo` expected to instantiate the shared `styled-system` type machinery ~4×
-   more than `tsc` (a fixed ~489K-instantiation overhead, independent of file count),
-   or does this indicate missing instantiation/type caching of shared generic types
-   vs `tsc`?
-2. Is there a heap budget / GC knob recommended for `tsgo` in memory-constrained CI?
+1. Why does `tsgo` instantiate a shared generic type once per module for the first ~4
+   modules that use it, rather than caching the instantiation program-wide like `tsc`?
+   Within a module the caching is already correct (1×, matching `tsc`) — what differs at
+   the module boundary, and why does it saturate at 4?
+2. Is the fixed ~4× over-instantiation of shared generics (here +489,160, but additive
+   across every generic-heavy library in a real app) expected, or a caching gap vs `tsc`?
+3. Is there a heap budget / GC knob recommended for `tsgo` in memory-constrained CI?
+```
